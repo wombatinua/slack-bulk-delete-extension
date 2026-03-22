@@ -32,12 +32,6 @@ body {
   overflow: hidden;
 }
 
-.popup-body {
-  min-width: 320px;
-  min-height: 220px;
-}
-
-.popup-card,
 .app-shell {
   width: calc(100vw - 8px);
   margin: 4px auto 8px;
@@ -50,17 +44,12 @@ body {
   overflow: hidden;
 }
 
-.popup-card,
 .hero,
 .panel {
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 10px;
   box-shadow: var(--shadow);
-}
-
-.popup-card {
-  padding: 14px;
 }
 
 .hero {
