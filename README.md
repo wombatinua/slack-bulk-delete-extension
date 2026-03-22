@@ -4,6 +4,18 @@ Bulk-delete your own Slack messages from the Slack web app, directly from Chrome
 
 This extension is meant for personal cleanup inside workspaces where you are already signed in to Slack in Chrome. It works as a side panel, scans conversations from your current Slack session, and deletes only messages authored by your account.
 
+## Release Notes
+
+### v0.1.1
+
+- added side-panel polish and compact Slack-like UI
+- added live progress metrics, cancellation, and clearer activity logging
+- optimized loading so conversations can appear before DM labels finish resolving
+- added per-workspace cache separation for conversations, participation, and cleaned markers
+- added support for deleting file and screenshot posts
+- added `Start from earliest message` as an alternative to a specific start date/time
+- added extension icons and release packaging polish
+
 ## What This Project Does
 
 - captures your current Slack web session token locally from your browser
