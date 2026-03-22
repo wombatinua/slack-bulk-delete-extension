@@ -46,13 +46,14 @@
         </div>
         <div id="participation-summary" class="inline-status muted">Participation filter not built yet.</div>
         <div class="grid two">
-          <label class="field">
+          <div class="field">
             <span>Start Date/Time</span>
             <div class="datetime-shell datetime-empty" data-datetime-shell>
               <span class="datetime-display">dd.mm.yyyy hh:mm</span>
               <input id="start-date" type="datetime-local">
             </div>
-          </label>
+            <label class="inline-check subtle-check"><input id="start-from-first" type="checkbox"> <span>Start from earliest message</span></label>
+          </div>
           <label class="field">
             <span>End Date/Time</span>
             <div class="datetime-shell datetime-empty" data-datetime-shell>

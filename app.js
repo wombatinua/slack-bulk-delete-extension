@@ -8,6 +8,7 @@ const els = {
   onlyParticipated: document.querySelector("#only-participated"),
   participationSummary: document.querySelector("#participation-summary"),
   startDate: document.querySelector("#start-date"),
+  startFromFirst: document.querySelector("#start-from-first"),
   endDate: document.querySelector("#end-date"),
   textFilter: document.querySelector("#text-filter"),
   includeThreads: document.querySelector("#include-threads"),
@@ -30,6 +31,7 @@ const state = {
   workspaceStates: {},
   channels: [],
   usersById: new Map(),
+  usersByTeamId: new Map(),
   participationByChannel: new Map(),
   cleanedByChannel: new Map(),
   activeOperation: "",
@@ -56,6 +58,7 @@ const METHOD_MIN_INTERVAL_MS = {
   "conversations.list": 3200,
   "users.list": 3200
 };
+const DELETE_QUEUE_MAX = 120;
 
 function formatTime24(date) {
   return new Intl.DateTimeFormat(undefined, {
@@ -150,6 +153,12 @@ function syncDateInputState(input) {
   display.textContent = formatDateTimeInputDisplay(input.value);
 }
 
+function syncStartDateMode() {
+  const disableStartDate = state.running || els.startFromFirst.checked;
+  els.startDate.disabled = disableStartDate;
+  syncDateInputState(els.startDate);
+}
+
 function buildStreamingSummary({
   cursor
 }) {
@@ -183,13 +192,14 @@ function setRunning(running, operation = "") {
   els.clearToken.disabled = running;
   els.channelSelect.disabled = running;
   els.onlyParticipated.disabled = running;
-  els.startDate.disabled = running;
+  els.startFromFirst.disabled = running;
   els.endDate.disabled = running;
   els.textFilter.disabled = running;
   els.includeThreads.disabled = running;
   els.includeNonText.disabled = running;
   els.runDelete.disabled = running;
   els.cancelRun.disabled = !(running && operation === "delete");
+  syncStartDateMode();
 }
 
 function throwIfCancelled() {
@@ -263,6 +273,7 @@ function workspaceSnapshot(teamId) {
 function applyWorkspaceState(teamId) {
   const snapshot = workspaceSnapshot(teamId);
   state.channels = snapshot?.channels ?? [];
+  state.usersById = state.usersByTeamId.get(teamId) ?? new Map();
   state.participationByChannel = new Map(
     Object.entries(snapshot?.participationByChannel ?? {})
   );
@@ -637,17 +648,36 @@ function buildUserLabel(user) {
 }
 
 async function loadUsersDirectory() {
+  return loadUsersDirectoryForTeam(currentTeamId());
+}
+
+async function loadUsersDirectoryForTeam(teamId, { silentStatus = false } = {}) {
+  if (!teamId) {
+    const usersById = new Map();
+    state.usersById = usersById;
+    return usersById;
+  }
+
+  const cachedUsers = state.usersByTeamId.get(teamId);
+  if (cachedUsers) {
+    state.usersById = cachedUsers;
+    log(`Using cached people directory for ${state.auth?.team ?? "this workspace"} (${cachedUsers.size} profiles).`);
+    return cachedUsers;
+  }
+
   const usersById = new Map();
   let cursor = "";
   let pages = 0;
 
-  updateLiveStatus("Loading people directory", {
-    scanned: "0",
-    matched: "-",
-    deleted: "-",
-    failed: "-",
-    threads: "-"
-  });
+  if (!silentStatus) {
+    updateLiveStatus("Loading people directory", {
+      scanned: "0",
+      matched: "-",
+      deleted: "-",
+      failed: "-",
+      threads: "-"
+    });
+  }
   log("Loading people directory for DM labels.");
 
   do {
@@ -663,21 +693,25 @@ async function loadUsersDirectory() {
     }
 
     cursor = response.response_metadata?.next_cursor ?? "";
-    updateLiveStatus(`Loading people directory • page ${pages}`, {
-      scanned: usersById.size.toLocaleString(),
-      matched: "-",
-      deleted: "-",
-      failed: "-",
-      threads: "-"
-    });
+    if (!silentStatus) {
+      updateLiveStatus(`Loading people directory • page ${pages}`, {
+        scanned: usersById.size.toLocaleString(),
+        matched: "-",
+        deleted: "-",
+        failed: "-",
+        threads: "-"
+      });
+    }
     log(`People directory page ${pages}: ${usersById.size} profiles loaded so far.`);
   } while (cursor);
 
+  state.usersByTeamId.set(teamId, usersById);
   state.usersById = usersById;
   log(`Loaded ${usersById.size} user profiles for DM labels.`);
+  return usersById;
 }
 
-function channelLabel(channel) {
+function channelLabel(channel, usersById = state.usersById) {
   const type = channel.is_im
     ? "DM"
     : channel.is_mpim
@@ -689,11 +723,11 @@ function channelLabel(channel) {
   let name = channel.name || channel.id;
 
   if (channel.is_im) {
-    const user = state.usersById.get(channel.user);
+    const user = usersById.get(channel.user);
     name = user?.label ?? channel.user ?? channel.id;
   } else if (channel.is_mpim && Array.isArray(channel.members) && channel.members.length) {
     const memberNames = channel.members.map((memberId) => {
-      return state.usersById.get(memberId)?.shortLabel ?? memberId;
+      return usersById.get(memberId)?.shortLabel ?? memberId;
     });
     name = memberNames.join(", ");
   }
@@ -701,21 +735,36 @@ function channelLabel(channel) {
   return `${type}: ${name} (${channel.id})`;
 }
 
+function buildChannelRecord(channel, usersById = state.usersById) {
+  return {
+    id: channel.id,
+    label: channelLabel(channel, usersById),
+    kind: channel.is_im
+      ? "dm"
+      : channel.is_mpim
+        ? "mpim"
+        : channel.is_private
+          ? "private"
+          : "channel",
+    scanEligible: !channel.is_im
+  };
+}
+
 async function loadChannels() {
   if (!state.auth) {
     await verifyToken();
   }
 
-  try {
-    await loadUsersDirectory();
-  } catch (error) {
+  const teamId = currentTeamId();
+  const hadCachedUsers = state.usersByTeamId.has(teamId);
+  const usersPromise = loadUsersDirectoryForTeam(teamId, { silentStatus: true }).catch((error) => {
     if (error.message === "Run cancelled.") {
       throw error;
     }
-    state.usersById = new Map();
+    state.usersById = state.usersByTeamId.get(teamId) ?? new Map();
     log(`users.list unavailable, keeping raw DM labels: ${error.message}`);
-  }
-
+    return null;
+  });
   log("Loading conversations.");
   updateLiveStatus("Loading conversations", {
     scanned: "0",
@@ -724,7 +773,7 @@ async function loadChannels() {
     failed: "-",
     threads: "-"
   });
-  const channels = [];
+  const rawChannels = [];
   let cursor = "";
   let pages = 0;
 
@@ -739,34 +788,24 @@ async function loadChannels() {
     pages += 1;
 
     for (const channel of response.channels ?? []) {
-      channels.push({
-        id: channel.id,
-        label: channelLabel(channel),
-        kind: channel.is_im
-          ? "dm"
-          : channel.is_mpim
-            ? "mpim"
-            : channel.is_private
-              ? "private"
-              : "channel",
-        scanEligible: !channel.is_im
-      });
+      rawChannels.push(channel);
     }
 
     cursor = response.response_metadata?.next_cursor ?? "";
     updateLiveStatus(`Loading conversations • page ${pages}`, {
-      scanned: channels.length.toLocaleString(),
+      scanned: rawChannels.length.toLocaleString(),
       matched: "-",
       deleted: "-",
       failed: "-",
       threads: "-"
     });
-    log(`Conversation page ${pages}: ${channels.length} conversations loaded so far.`);
+    log(`Conversation page ${pages}: ${rawChannels.length} conversations loaded so far.`);
   } while (cursor);
 
+  let channels = rawChannels.map((channel) => buildChannelRecord(channel));
   channels.sort((left, right) => left.label.localeCompare(right.label));
   state.channels = channels;
-  const preferredChannelId = workspaceSnapshot(currentTeamId())?.lastChannelId ?? "";
+  const preferredChannelId = workspaceSnapshot(teamId)?.lastChannelId ?? "";
   const selectedChannelId = channels.some((channel) => channel.id === preferredChannelId)
     ? preferredChannelId
     : channels[0]?.id ?? "";
@@ -791,6 +830,31 @@ async function loadChannels() {
     threads: "-"
   });
   log(`Loaded ${channels.length} conversations.`);
+
+  const usersById = await usersPromise;
+  if (usersById && state.auth?.team_id === teamId && !hadCachedUsers) {
+    updateLiveStatus("Refreshing DM labels", {
+      scanned: channels.length.toLocaleString(),
+      matched: "-",
+      deleted: "-",
+      failed: "-",
+      threads: "-"
+    });
+    channels = rawChannels.map((channel) => buildChannelRecord(channel, usersById));
+    channels.sort((left, right) => left.label.localeCompare(right.label));
+    state.channels = channels;
+    renderChannels(selectedChannelId);
+    await persistState({ lastChannelId: selectedChannelId });
+    updateParticipationSummary();
+    updateLiveStatus("Conversations loaded", {
+      scanned: channels.length.toLocaleString(),
+      matched: "-",
+      deleted: "-",
+      failed: "-",
+      threads: "-"
+    });
+    log("Refreshed DM labels from people directory.");
+  }
 }
 
 async function listHistoryPage(channel, oldest, latest, cursor = "") {
@@ -954,7 +1018,6 @@ async function deleteCandidate(candidate) {
 
 async function handleCandidate(candidate, stats) {
   try {
-    stats.matched += 1;
     await deleteCandidate(candidate);
     stats.deleted += 1;
     log(`Deleted ${candidate.ts} ${candidate.source}`);
@@ -986,6 +1049,8 @@ async function runBulkDelete() {
   state.cancelRequested = false;
   setRunning(true, "delete");
   resetRunMetrics();
+  let deleteProducerFinished = true;
+  let deleteWorkerPromise = Promise.resolve();
 
   try {
     if (!state.auth) {
@@ -997,7 +1062,8 @@ async function runBulkDelete() {
       throw new Error("Select a conversation first.");
     }
 
-    const oldest = slackTimestampFromInput(els.startDate.value);
+    const startFromFirst = els.startFromFirst.checked;
+    const oldest = startFromFirst ? null : slackTimestampFromInput(els.startDate.value);
     const latest = slackTimestampFromInput(els.endDate.value);
     const includeThreads = els.includeThreads.checked;
     const includeNonText = els.includeNonText.checked;
@@ -1006,6 +1072,13 @@ async function runBulkDelete() {
     const channelLabel = displayChannelLabel(channel);
     const qualifiesForCleanMarker =
       !oldest && !latest && !textFilter && includeThreads && includeNonText;
+    const timeRangeDescription = startFromFirst
+      ? latest
+        ? "from earliest message to selected end"
+        : "from earliest message"
+      : oldest || latest
+        ? "date range applied"
+        : "full history";
 
     await persistState({ lastChannelId: channel });
 
@@ -1020,6 +1093,8 @@ async function runBulkDelete() {
     };
 
     const threadRoots = [];
+    const deleteQueue = [];
+    deleteProducerFinished = false;
     let cursor = "";
     const renderDeleteMetrics = (phase) => {
       updateRunMetrics({
@@ -1040,20 +1115,45 @@ async function runBulkDelete() {
         })
       );
     };
+    const waitForQueueSpace = async () => {
+      while (deleteQueue.length >= DELETE_QUEUE_MAX) {
+        throwIfCancelled();
+        await sleep(100);
+      }
+    };
+    const enqueueCandidate = async (candidate) => {
+      stats.matched += 1;
+      await waitForQueueSpace();
+      deleteQueue.push(candidate);
+    };
+    deleteWorkerPromise = (async () => {
+      while (true) {
+        throwIfCancelled();
+
+        if (!deleteQueue.length) {
+          if (deleteProducerFinished) {
+            return;
+          }
+          await sleep(100);
+          continue;
+        }
+
+        const candidate = deleteQueue.shift();
+        await handleCandidate(candidate, stats);
+      }
+    })();
 
     setRunSummary(`Preparing cleanup for ${channelLabel}.`);
     renderDeleteMetrics("Top-level scan • page 0");
     log(`Starting cleanup for ${channelLabel}.`);
     log(
-      `Run options: ${includeThreads ? "with" : "without"} thread replies, ${includeNonText ? "with" : "without"} files/screenshots${textFilter ? `, text contains "${textFilter}"` : ""}${oldest || latest ? ", date range applied" : ", full history"}.`
+      `Run options: ${includeThreads ? "with" : "without"} thread replies, ${includeNonText ? "with" : "without"} files/screenshots${textFilter ? `, text contains "${textFilter}"` : ""}, ${timeRangeDescription}.`
     );
     log("Top-level history is scanned page by page. Total top-level count is unknown until Slack stops returning more pages.");
 
     do {
       throwIfCancelled();
       const pageMatchedBefore = stats.matched;
-      const pageDeletedBefore = stats.deleted;
-      const pageFailedBefore = stats.failed;
       const page = await listHistoryPage(channel, oldest, latest, cursor);
       cursor = page.cursor;
       stats.historyPages += 1;
@@ -1081,37 +1181,33 @@ async function runBulkDelete() {
           continue;
         }
 
-        renderDeleteMetrics(`Deleting top-level match • page ${stats.historyPages}`);
-        await handleCandidate(
+        await enqueueCandidate(
           {
             channel,
             ts: message.ts,
             text: message.text ?? "",
             source: "history"
-          },
-          stats
+          }
         );
-        renderDeleteMetrics(`Top-level scan • page ${stats.historyPages}`);
+        renderDeleteMetrics(`Scanning + deleting top-level • page ${stats.historyPages}`);
         syncStreamingSummary();
       }
 
       const pageMatched = stats.matched - pageMatchedBefore;
-      const pageDeleted = stats.deleted - pageDeletedBefore;
-      const pageFailed = stats.failed - pageFailedBefore;
       log(
-        `History page ${stats.historyPages} complete: matched ${pageMatched}, deleted ${pageDeleted}, failed ${pageFailed}, scanned so far ${stats.topLevelFetched} top-level messages, queued ${stats.threadRootsQueued} threaded roots.`
+        `History page ${stats.historyPages} complete: matched ${pageMatched}, scanned so far ${stats.topLevelFetched} top-level messages, queued ${stats.threadRootsQueued} threaded roots, delete queue ${deleteQueue.length}.`
       );
       syncStreamingSummary();
       renderDeleteMetrics(
         cursor
-          ? `Top-level scan • page ${stats.historyPages}`
+          ? `Scanning + deleting top-level • page ${stats.historyPages}`
           : "Top-level scan complete"
       );
     } while (cursor);
 
     if (includeThreads && threadRoots.length) {
       setRunSummary(`Processing threaded replies in ${channelLabel}.`);
-      renderDeleteMetrics(`Thread scan • 0/${threadRoots.length}`);
+      renderDeleteMetrics(`Scanning + deleting thread replies • 0/${threadRoots.length}`);
       log(`Top-level scan complete. Processing ${threadRoots.length} threaded roots in ${channelLabel}.`);
 
       for (let index = 0; index < threadRoots.length; index += 1) {
@@ -1119,20 +1215,18 @@ async function runBulkDelete() {
         const root = threadRoots[index];
         const threadProgress = formatProgress(index + 1, threadRoots.length);
         log(`Thread scan ${threadProgress}: root ${root.ts}`);
-        renderDeleteMetrics(`Scanning thread replies • ${index + 1}/${threadRoots.length}`);
+        renderDeleteMetrics(`Scanning + deleting thread replies • ${index + 1}/${threadRoots.length}`);
 
         if (messageMatchesFilters(root, authUserId, textFilter, includeNonText)) {
-          renderDeleteMetrics(`Deleting thread root • ${index + 1}/${threadRoots.length}`);
-          await handleCandidate(
+          await enqueueCandidate(
             {
               channel,
               ts: root.ts,
               text: root.text ?? "",
               source: "thread-root"
-            },
-            stats
+            }
           );
-          renderDeleteMetrics(`Scanning thread replies • ${index + 1}/${threadRoots.length}`);
+          renderDeleteMetrics(`Scanning + deleting thread replies • ${index + 1}/${threadRoots.length}`);
         }
 
         const replies = await listReplies(channel, root.ts, oldest, latest);
@@ -1146,28 +1240,33 @@ async function runBulkDelete() {
             continue;
           }
 
-          renderDeleteMetrics(`Deleting thread reply • ${index + 1}/${threadRoots.length}`);
-          await handleCandidate(
+          await enqueueCandidate(
             {
               channel,
               ts: reply.ts,
               text: reply.text ?? "",
               source: "thread"
-            },
-            stats
+            }
           );
-          renderDeleteMetrics(`Scanning thread replies • ${index + 1}/${threadRoots.length}`);
+          renderDeleteMetrics(`Scanning + deleting thread replies • ${index + 1}/${threadRoots.length}`);
         }
 
         stats.threadRootsProcessed += 1;
         setRunSummary(`Processing threaded replies in ${channelLabel}.`);
-        renderDeleteMetrics(`Thread scan • ${stats.threadRootsProcessed}/${stats.threadRootsQueued}`);
+        renderDeleteMetrics(`Scanning + deleting thread replies • ${stats.threadRootsProcessed}/${stats.threadRootsQueued}`);
       }
     } else if (includeThreads) {
       log(`No threaded roots found in ${channelLabel}.`);
       setRunSummary(`No threaded replies found in ${channelLabel}.`);
       renderDeleteMetrics("No threaded roots found");
     }
+
+    deleteProducerFinished = true;
+    if (deleteQueue.length) {
+      setRunSummary("Waiting for queued deletes to finish.");
+      renderDeleteMetrics("Finishing queued deletes");
+    }
+    await deleteWorkerPromise;
 
     setRunSummary(`Cleanup finished for ${channelLabel}.`);
     renderDeleteMetrics("Completed");
@@ -1179,6 +1278,13 @@ async function runBulkDelete() {
       log("Marked conversation as cleaned.");
     }
   } catch (error) {
+    deleteProducerFinished = true;
+    if (!state.cancelRequested) {
+      state.cancelRequested = true;
+      state.activeRequestController?.abort();
+    }
+    await deleteWorkerPromise.catch(() => {});
+
     if (error.message === "Run cancelled.") {
       setRunSummary("Cancellation complete.");
       updateRunMetrics({
@@ -1217,9 +1323,12 @@ els.clearToken.addEventListener("click", async () => {
   state.auth = null;
   state.workspaceStates = {};
   state.channels = [];
+  state.usersById = new Map();
+  state.usersByTeamId = new Map();
   state.participationByChannel = new Map();
   state.cleanedByChannel = new Map();
   els.startDate.value = "";
+  els.startFromFirst.checked = false;
   els.endDate.value = "";
   els.textFilter.value = "";
   els.includeThreads.checked = true;
@@ -1227,6 +1336,7 @@ els.clearToken.addEventListener("click", async () => {
   els.onlyParticipated.checked = false;
   syncDateInputState(els.startDate);
   syncDateInputState(els.endDate);
+  syncStartDateMode();
   setConnectionPill("Not connected", true);
   setAuthSummary("Reset complete. Open Slack and connect again when needed.");
   setRunSummary("Idle.");
@@ -1310,6 +1420,12 @@ loadStoredState().catch((error) => {
   input.addEventListener("change", () => {
     syncDateInputState(input);
   });
+});
+
+syncStartDateMode();
+
+els.startFromFirst.addEventListener("change", () => {
+  syncStartDateMode();
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {

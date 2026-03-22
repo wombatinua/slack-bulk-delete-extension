@@ -476,6 +476,33 @@ select:disabled {
   color: var(--text);
 }
 
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.inline-check input {
+  width: auto;
+  margin: 0;
+}
+
+.inline-check span {
+  line-height: 1.25;
+}
+
+.subtle-check {
+  color: var(--muted);
+}
+
+.subtle-check:has(input:disabled) {
+  opacity: 0.6;
+}
+
 .log {
   min-height: 0;
   flex: 1 1 auto;
