@@ -151,12 +151,11 @@ function syncDateInputState(input) {
 }
 
 function buildStreamingSummary({
-  channelLabel,
   cursor
 }) {
   return cursor
-    ? `Streaming top-level history in ${channelLabel}. Total remains unknown until Slack finishes pagination.`
-    : `Top-level history scan finished for ${channelLabel}.`;
+    ? "Streaming top-level history. Total stays unknown until pagination finishes."
+    : "Top-level history scan finished.";
 }
 
 function setAuthSummary(message) {
@@ -1037,7 +1036,6 @@ async function runBulkDelete() {
     const syncStreamingSummary = () => {
       setRunSummary(
         buildStreamingSummary({
-          channelLabel,
           cursor
         })
       );
