@@ -48,11 +48,17 @@
         <div class="grid two">
           <label class="field">
             <span>Start Date/Time</span>
-            <input id="start-date" type="datetime-local">
+            <div class="datetime-shell datetime-empty" data-datetime-shell>
+              <span class="datetime-display">dd.mm.yyyy hh:mm</span>
+              <input id="start-date" type="datetime-local">
+            </div>
           </label>
           <label class="field">
             <span>End Date/Time</span>
-            <input id="end-date" type="datetime-local">
+            <div class="datetime-shell datetime-empty" data-datetime-shell>
+              <span class="datetime-display">dd.mm.yyyy hh:mm</span>
+              <input id="end-date" type="datetime-local">
+            </div>
           </label>
         </div>
         <label class="field">

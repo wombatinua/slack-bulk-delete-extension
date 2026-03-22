@@ -57,8 +57,29 @@ const METHOD_MIN_INTERVAL_MS = {
   "users.list": 3200
 };
 
+function formatTime24(date) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).format(date);
+}
+
+function formatDateTime24(date) {
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).format(date);
+}
+
 function log(message) {
-  const timestamp = new Date().toLocaleTimeString();
+  const timestamp = formatTime24(new Date());
   els.log.textContent += `[${timestamp}] ${message}\n`;
   els.log.scrollTop = els.log.scrollHeight;
 }
@@ -91,8 +112,42 @@ function resetRunMetrics() {
   updateRunMetrics();
 }
 
+function updateLiveStatus(phase, overrides = {}) {
+  updateRunMetrics({
+    phase,
+    scanned: overrides.scanned ?? els.metricScanned.textContent,
+    matched: overrides.matched ?? els.metricMatched.textContent,
+    deleted: overrides.deleted ?? els.metricDeleted.textContent,
+    failed: overrides.failed ?? els.metricFailed.textContent,
+    threads: overrides.threads ?? els.metricThreads.textContent
+  });
+}
+
+function formatDateTimeInputDisplay(value) {
+  if (!value) {
+    return "dd.mm.yyyy hh:mm";
+  }
+
+  const [datePart, timePart = ""] = value.split("T");
+  const [year = "", month = "", day = ""] = datePart.split("-");
+  const [hour = "00", minute = "00"] = timePart.split(":");
+  if (!year || !month || !day) {
+    return "dd.mm.yyyy hh:mm";
+  }
+
+  return `${day}.${month}.${year} ${hour}:${minute}`;
+}
+
 function syncDateInputState(input) {
-  input.classList.toggle("datetime-empty", !input.value);
+  const shell = input.closest("[data-datetime-shell]");
+  const display = shell?.querySelector(".datetime-display");
+  if (!shell || !display) {
+    return;
+  }
+
+  const isEmpty = !input.value;
+  shell.classList.toggle("datetime-empty", isEmpty);
+  display.textContent = formatDateTimeInputDisplay(input.value);
 }
 
 function buildStreamingSummary({
@@ -315,6 +370,16 @@ async function slackApi(method, params = {}) {
       methodRateState.set(method, {
         nextAllowedAt: Date.now() + retryAfter * 1000
       });
+      if (state.activeOperation === "delete") {
+        updateRunMetrics({
+          phase: `Waiting for Slack retry • ${method}`,
+          scanned: els.metricScanned.textContent,
+          matched: els.metricMatched.textContent,
+          deleted: els.metricDeleted.textContent,
+          failed: els.metricFailed.textContent,
+          threads: els.metricThreads.textContent
+        });
+      }
       log(`${method} hit rate limit. Waiting ${retryAfter}s.`);
       await sleep(retryAfter * 1000);
       continue;
@@ -396,7 +461,7 @@ async function loadStoredState() {
   } else if (stored.token && stored.capturedAt) {
     setConnectionPill("Session captured", true);
     setAuthSummary(
-      `Captured a Slack web session token at ${new Date(stored.capturedAt).toLocaleString()}.`
+      `Captured a Slack web session token at ${formatDateTime24(new Date(stored.capturedAt))}.`
     );
   } else {
     setConnectionPill("Not connected", true);
@@ -504,6 +569,13 @@ function updateParticipationSummary() {
 }
 
 async function loadCapturedToken() {
+  updateLiveStatus("Loading captured Slack session", {
+    scanned: "-",
+    matched: "-",
+    deleted: "-",
+    failed: "-",
+    threads: "-"
+  });
   const stored = await chrome.storage.local.get(["token", "capturedAt"]);
   if (!stored.token) {
     throw new Error("No Slack session captured yet. Reload a Slack tab and try again.");
@@ -512,7 +584,7 @@ async function loadCapturedToken() {
   state.token = stored.token;
   setConnectionPill("Session captured", true);
   setAuthSummary(
-    `Loaded captured Slack session from ${stored.capturedAt ? new Date(stored.capturedAt).toLocaleString() : "recently"}.`
+    `Loaded captured Slack session from ${stored.capturedAt ? formatDateTime24(new Date(stored.capturedAt)) : "recently"}.`
   );
   log("Loaded token captured from the current Slack browser session.");
 }
@@ -522,6 +594,13 @@ async function verifyToken() {
     throw new Error("No Slack session captured yet. Reload a Slack tab and try again.");
   }
 
+  updateLiveStatus("Verifying Slack session", {
+    scanned: "-",
+    matched: "-",
+    deleted: "-",
+    failed: "-",
+    threads: "-"
+  });
   log("Verifying token with auth.test.");
   const previousTeamId = currentTeamId();
   const auth = await slackApi("auth.test");
@@ -563,6 +642,13 @@ async function loadUsersDirectory() {
   let cursor = "";
   let pages = 0;
 
+  updateLiveStatus("Loading people directory", {
+    scanned: "0",
+    matched: "-",
+    deleted: "-",
+    failed: "-",
+    threads: "-"
+  });
   log("Loading people directory for DM labels.");
 
   do {
@@ -578,6 +664,13 @@ async function loadUsersDirectory() {
     }
 
     cursor = response.response_metadata?.next_cursor ?? "";
+    updateLiveStatus(`Loading people directory • page ${pages}`, {
+      scanned: usersById.size.toLocaleString(),
+      matched: "-",
+      deleted: "-",
+      failed: "-",
+      threads: "-"
+    });
     log(`People directory page ${pages}: ${usersById.size} profiles loaded so far.`);
   } while (cursor);
 
@@ -617,11 +710,21 @@ async function loadChannels() {
   try {
     await loadUsersDirectory();
   } catch (error) {
+    if (error.message === "Run cancelled.") {
+      throw error;
+    }
     state.usersById = new Map();
     log(`users.list unavailable, keeping raw DM labels: ${error.message}`);
   }
 
   log("Loading conversations.");
+  updateLiveStatus("Loading conversations", {
+    scanned: "0",
+    matched: "-",
+    deleted: "-",
+    failed: "-",
+    threads: "-"
+  });
   const channels = [];
   let cursor = "";
   let pages = 0;
@@ -652,6 +755,13 @@ async function loadChannels() {
     }
 
     cursor = response.response_metadata?.next_cursor ?? "";
+    updateLiveStatus(`Loading conversations • page ${pages}`, {
+      scanned: channels.length.toLocaleString(),
+      matched: "-",
+      deleted: "-",
+      failed: "-",
+      threads: "-"
+    });
     log(`Conversation page ${pages}: ${channels.length} conversations loaded so far.`);
   } while (cursor);
 
@@ -674,6 +784,13 @@ async function loadChannels() {
     `Verified as ${state.auth.user} (${state.auth.user_id}) on ${state.auth.team}. Loaded ${channels.length} conversations.`
   );
   updateParticipationSummary();
+  updateLiveStatus("Conversations loaded", {
+    scanned: channels.length.toLocaleString(),
+    matched: "-",
+    deleted: "-",
+    failed: "-",
+    threads: "-"
+  });
   log(`Loaded ${channels.length} conversations.`);
 }
 
@@ -843,7 +960,9 @@ async function handleCandidate(candidate, stats) {
     stats.deleted += 1;
     log(`Deleted ${candidate.ts} ${candidate.source}`);
   } catch (error) {
-    stats.matched += 0;
+    if (error.message === "Run cancelled.") {
+      throw error;
+    }
     stats.failed += 1;
     log(`Failed ${candidate.ts}: ${error.message}`);
   }
@@ -964,6 +1083,7 @@ async function runBulkDelete() {
           continue;
         }
 
+        renderDeleteMetrics(`Deleting top-level match • page ${stats.historyPages}`);
         await handleCandidate(
           {
             channel,
@@ -1001,9 +1121,10 @@ async function runBulkDelete() {
         const root = threadRoots[index];
         const threadProgress = formatProgress(index + 1, threadRoots.length);
         log(`Thread scan ${threadProgress}: root ${root.ts}`);
-        renderDeleteMetrics(`Thread scan • ${index + 1}/${threadRoots.length}`);
+        renderDeleteMetrics(`Scanning thread replies • ${index + 1}/${threadRoots.length}`);
 
         if (messageMatchesFilters(root, authUserId, textFilter, includeNonText)) {
+          renderDeleteMetrics(`Deleting thread root • ${index + 1}/${threadRoots.length}`);
           await handleCandidate(
             {
               channel,
@@ -1013,7 +1134,7 @@ async function runBulkDelete() {
             },
             stats
           );
-          renderDeleteMetrics(`Thread scan • ${index + 1}/${threadRoots.length}`);
+          renderDeleteMetrics(`Scanning thread replies • ${index + 1}/${threadRoots.length}`);
         }
 
         const replies = await listReplies(channel, root.ts, oldest, latest);
@@ -1027,6 +1148,7 @@ async function runBulkDelete() {
             continue;
           }
 
+          renderDeleteMetrics(`Deleting thread reply • ${index + 1}/${threadRoots.length}`);
           await handleCandidate(
             {
               channel,
@@ -1036,7 +1158,7 @@ async function runBulkDelete() {
             },
             stats
           );
-          renderDeleteMetrics(`Thread scan • ${index + 1}/${threadRoots.length}`);
+          renderDeleteMetrics(`Scanning thread replies • ${index + 1}/${threadRoots.length}`);
         }
 
         stats.threadRootsProcessed += 1;
@@ -1203,7 +1325,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     setConnectionPill("Session captured", true);
     if (capturedAt) {
       setAuthSummary(
-        `Captured a Slack web session token at ${new Date(capturedAt).toLocaleString()}.`
+        `Captured a Slack web session token at ${formatDateTime24(new Date(capturedAt))}.`
       );
     }
   }
