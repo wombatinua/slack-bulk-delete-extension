@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Slack Bulk Delete</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero">
+        <div class="hero-top">
+          <div>
+            <h1>Slack Bulk Delete</h1>
+          </div>
+          <div class="hero-pills">
+            <span id="connection-pill" class="pill subtle">Not connected</span>
+            <span id="cache-pill" class="pill subtle">No participation cache</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel compact-panel">
+        <div class="panel-head">
+          <h2>Connection</h2>
+        </div>
+        <div class="actions compact-actions">
+          <button id="connect-slack" class="button primary" type="button">Connect Slack</button>
+          <button id="clear-token" class="button secondary" type="button">Reset All Data</button>
+        </div>
+        <div id="auth-summary" class="status-box muted">Not verified.</div>
+      </section>
+
+      <section class="panel compact-panel">
+        <div class="panel-head">
+          <h2>Selection</h2>
+        </div>
+        <label class="field">
+          <span>Conversation</span>
+          <select id="channel-select">
+            <option value="">Connect Slack to load conversations</option>
+          </select>
+        </label>
+        <div class="checkboxes">
+          <label class="checkbox-card compact-check"><input id="only-participated" type="checkbox"> <span>Only show conversations where I've posted</span></label>
+        </div>
+        <div id="participation-summary" class="inline-status muted">Participation filter not built yet.</div>
+        <div class="grid two">
+          <label class="field">
+            <span>Start Date/Time</span>
+            <input id="start-date" type="datetime-local">
+          </label>
+          <label class="field">
+            <span>End Date/Time</span>
+            <input id="end-date" type="datetime-local">
+          </label>
+        </div>
+        <label class="field">
+          <span>Text Filter</span>
+          <input id="text-filter" type="text" autocomplete="off" placeholder="Optional substring match">
+        </label>
+        <div class="checkboxes single-row">
+          <label class="checkbox-card"><input id="include-threads" type="checkbox" checked> <span>Include thread replies</span></label>
+          <label class="checkbox-card"><input id="include-non-text" type="checkbox"> <span>Include files and screenshots</span></label>
+        </div>
+      </section>
+
+      <section class="panel compact-panel run-panel">
+        <div class="panel-head">
+          <h2>Run</h2>
+        </div>
+        <div class="actions compact-actions">
+          <button id="run-delete" class="button danger" type="button">Start Bulk Delete</button>
+          <button id="cancel-run" class="button secondary" type="button" disabled>Cancel</button>
+        </div>
+        <div class="run-metrics" aria-live="polite">
+          <div class="metric-card metric-card-wide">
+            <span class="metric-label">Live Status</span>
+            <strong id="metric-phase" class="metric-value">Idle</strong>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Top-level</span>
+            <strong id="metric-scanned" class="metric-value">0</strong>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Matched</span>
+            <strong id="metric-matched" class="metric-value">0</strong>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Deleted</span>
+            <strong id="metric-deleted" class="metric-value">0</strong>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Failed</span>
+            <strong id="metric-failed" class="metric-value">0</strong>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Threads</span>
+            <strong id="metric-threads" class="metric-value">0/0</strong>
+          </div>
+        </div>
+        <div id="run-summary" class="run-status muted">Idle.</div>
+        <div class="log-head">
+          <span class="metric-label">Activity Log</span>
+        </div>
+        <pre id="log" class="log" aria-live="polite"></pre>
+      </section>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

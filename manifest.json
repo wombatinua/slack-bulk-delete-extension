@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Slack Bulk Delete",
+  "version": "0.1.0",
+  "description": "In-house bulk deletion for your own Slack messages using direct Slack Web API calls.",
+  "permissions": [
+    "storage",
+    "webRequest",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://slack.com/*",
+    "https://*.slack.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "app.html"
+  },
+  "action": {
+    "default_title": "Slack Bulk Delete"
+  }
+}
