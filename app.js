@@ -1108,6 +1108,24 @@ async function runBulkDelete() {
           : "0/0"
       });
     };
+    const deletePhaseLabel = (candidate) => {
+      if (deleteProducerFinished) {
+        return deleteQueue.length
+          ? `Finishing queued deletes • ${deleteQueue.length} left`
+          : "Finishing queued deletes";
+      }
+
+      if (candidate.source === "history") {
+        return `Deleting top-level match • page ${stats.historyPages}`;
+      }
+      if (candidate.source === "thread-root") {
+        return `Deleting thread root • ${stats.threadRootsProcessed}/${stats.threadRootsQueued}`;
+      }
+      if (candidate.source === "thread") {
+        return `Deleting thread reply • ${stats.threadRootsProcessed}/${stats.threadRootsQueued}`;
+      }
+      return "Deleting matched message";
+    };
     const syncStreamingSummary = () => {
       setRunSummary(
         buildStreamingSummary({
@@ -1139,7 +1157,9 @@ async function runBulkDelete() {
         }
 
         const candidate = deleteQueue.shift();
+        renderDeleteMetrics(deletePhaseLabel(candidate));
         await handleCandidate(candidate, stats);
+        renderDeleteMetrics(deletePhaseLabel(candidate));
       }
     })();
 
@@ -1264,7 +1284,7 @@ async function runBulkDelete() {
     deleteProducerFinished = true;
     if (deleteQueue.length) {
       setRunSummary("Waiting for queued deletes to finish.");
-      renderDeleteMetrics("Finishing queued deletes");
+      renderDeleteMetrics(`Finishing queued deletes • ${deleteQueue.length} left`);
     }
     await deleteWorkerPromise;
 
