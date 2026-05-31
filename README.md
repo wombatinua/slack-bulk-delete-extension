@@ -24,6 +24,7 @@ This extension is meant for personal cleanup inside workspaces where you are alr
 - filters to your own messages only
 - can optionally include thread replies
 - can optionally include file and screenshot posts
+- can delete all files uploaded by your Slack user
 - supports date range and substring filtering
 - shows live progress while scanning and deleting
 - lets you cancel an active cleanup run
@@ -74,8 +75,8 @@ The normal flow is:
 5. Optionally narrow by date or text.
 6. Decide whether to include:
    - thread replies
-   - files and screenshots
-7. Click `Start Bulk Delete`.
+   - file-share messages
+7. Click `Delete Messages`.
 8. Watch the live status and log.
 9. Use `Cancel` if you want to stop.
 
@@ -116,13 +117,20 @@ The normal flow is:
 `Include thread replies`
 - Includes your replies inside threads, not just top-level messages.
 
-`Include files and screenshots`
-- Includes your `file_share` messages such as screenshots and file posts.
+`Include file-share messages only`
+- Includes Slack `file_share` chat messages, such as screenshot and file-post references.
+- This removes the chat message that shared the file, not the underlying uploaded file.
 
 ### Run
 
-`Start Bulk Delete`
+`Delete Messages`
 - Starts scanning and deleting based on the current filters.
+
+`Delete Uploaded Files`
+- Finds files uploaded by the verified Slack user.
+- Shows a browser confirmation with the number of files found.
+- Deletes those files with `files.delete`.
+- This is separate from the selected conversation and message filters.
 
 `Cancel`
 - Stops an active delete run as soon as the current request or wait finishes.
@@ -170,13 +178,16 @@ The extension works directly against Slack APIs used by the signed-in browser se
 - `conversations.history`
 - `conversations.replies`
 - `chat.delete`
+- `files.list`
+- `files.delete`
 
 ## Recommended Precautions
 
 - Start with a small DM or low-risk channel first.
 - If you are doing a large cleanup, consider setting a date range first.
 - Keep `Include thread replies` off if you only want top-level messages, because thread scanning is slower.
-- Only enable `Include files and screenshots` if you really want those posts removed too.
+- Only enable `Include file-share messages only` if you want matching file-share chat messages removed too.
+- Use `Delete Uploaded Files` only when you want to remove all files uploaded by your Slack user across the workspace.
 - If a workspace matters operationally, test on a small sample before doing a full-history cleanup.
 
 ## Rate Limits And Performance
