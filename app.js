@@ -14,6 +14,7 @@ const els = {
   includeThreads: document.querySelector("#include-threads"),
   includeNonText: document.querySelector("#include-non-text"),
   runDelete: document.querySelector("#run-delete"),
+  deleteFiles: document.querySelector("#delete-files"),
   cancelRun: document.querySelector("#cancel-run"),
   metricPhase: document.querySelector("#metric-phase"),
   metricScanned: document.querySelector("#metric-scanned"),
@@ -46,6 +47,8 @@ const METHOD_MIN_INTERVAL_MS = {
   // - chat.delete: Tier 3 (50+ per minute)
   // - conversations.history: Tier 3 (50+ per minute) for internal customer-built apps
   // - conversations.replies: Tier 3 (50+ per minute) for internal customer-built apps
+  // - files.list: Tier 3
+  // - files.delete: Tier 3
   // - conversations.list: Tier 2 (20+ per minute)
   // - users.list: Tier 2 (20+ per minute)
   // - auth.test: hundreds per minute
@@ -55,6 +58,8 @@ const METHOD_MIN_INTERVAL_MS = {
   "chat.delete": 1500,
   "conversations.history": 1500,
   "conversations.replies": 1500,
+  "files.list": 1500,
+  "files.delete": 1500,
   "conversations.list": 3200,
   "users.list": 3200
 };
@@ -198,6 +203,7 @@ function setRunning(running, operation = "") {
   els.includeThreads.disabled = running;
   els.includeNonText.disabled = running;
   els.runDelete.disabled = running;
+  els.deleteFiles.disabled = running;
   els.cancelRun.disabled = !(running && operation === "delete");
   syncStartDateMode();
 }
@@ -328,12 +334,13 @@ function isOwnSupportedMessage(message, authUserId, includeNonText) {
   return allowedSubtypes.has(subtype);
 }
 
-async function slackApi(method, params = {}) {
+async function slackApi(method, params = {}, options = {}) {
   if (!state.token) {
     throw new Error("Missing Slack token.");
   }
 
   const minimumInterval = METHOD_MIN_INTERVAL_MS[method] ?? 0;
+  const httpMethod = options.httpMethod ?? "POST";
 
   while (true) {
     throwIfCancelled();
@@ -355,15 +362,25 @@ async function slackApi(method, params = {}) {
 
     let response;
     try {
-      response = await fetch(`https://slack.com/api/${method}`, {
-        method: "POST",
+      const requestUrl = new URL(`https://slack.com/api/${method}`);
+      const fetchOptions = {
+        method: httpMethod,
         headers: {
-          Authorization: `Bearer ${state.token}`,
-          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+          Authorization: `Bearer ${state.token}`
         },
-        body: formEncode(params),
         signal: controller.signal
-      });
+      };
+
+      if (httpMethod === "GET") {
+        for (const [key, value] of formEncode(params)) {
+          requestUrl.searchParams.set(key, value);
+        }
+      } else {
+        fetchOptions.headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8";
+        fetchOptions.body = formEncode(params);
+      }
+
+      response = await fetch(requestUrl.toString(), fetchOptions);
     } catch (error) {
       if (error.name === "AbortError" && state.cancelRequested) {
         throw new Error("Run cancelled.");
@@ -1030,6 +1047,196 @@ async function handleCandidate(candidate, stats) {
   }
 }
 
+async function listOwnFilesPage(page) {
+  const response = await slackApi(
+    "files.list",
+    {
+      count: 100,
+      page,
+      show_files_hidden_by_limit: true,
+      types: "all",
+      user: state.auth.user_id
+    },
+    {
+      httpMethod: "GET"
+    }
+  );
+
+  return {
+    files: response.files ?? [],
+    paging: response.paging ?? {
+      count: 0,
+      total: 0,
+      page,
+      pages: 0
+    }
+  };
+}
+
+async function deleteFile(file) {
+  throwIfCancelled();
+  await slackApi("files.delete", {
+    file: file.id
+  });
+}
+
+function fileDisplayName(file) {
+  return file.title || file.name || file.id;
+}
+
+function renderFileMetrics(phase, stats) {
+  updateRunMetrics({
+    phase,
+    scanned: stats.scanned.toLocaleString(),
+    matched: stats.matched.toLocaleString(),
+    deleted: stats.deleted.toLocaleString(),
+    failed: stats.failed.toLocaleString(),
+    threads: "-"
+  });
+}
+
+async function collectOwnFiles() {
+  const files = [];
+  let pageNumber = 1;
+  let totalPages = 1;
+  let totalFiles = 0;
+
+  do {
+    throwIfCancelled();
+    const page = await listOwnFilesPage(pageNumber);
+    const pageFiles = page.files.filter((file) => file.user === state.auth.user_id);
+    files.push(...pageFiles);
+
+    totalFiles = page.paging.total ?? files.length;
+    totalPages = page.paging.pages ?? pageNumber;
+    updateLiveStatus(`Listing files • page ${pageNumber}/${totalPages || "?"}`, {
+      scanned: files.length.toLocaleString(),
+      matched: totalFiles ? totalFiles.toLocaleString() : files.length.toLocaleString(),
+      deleted: "0",
+      failed: "0",
+      threads: "-"
+    });
+    log(
+      `File page ${pageNumber}: found ${pageFiles.length} owned files, ${files.length}/${totalFiles || "unknown"} listed so far.`
+    );
+
+    pageNumber += 1;
+  } while (pageNumber <= totalPages);
+
+  return files;
+}
+
+async function runDeleteFiles() {
+  if (state.running) {
+    return;
+  }
+
+  clearLog();
+  state.cancelRequested = false;
+  setRunning(true, "delete");
+  resetRunMetrics();
+
+  const stats = {
+    scanned: 0,
+    matched: 0,
+    deleted: 0,
+    failed: 0
+  };
+
+  try {
+    if (!state.auth) {
+      await connectSlack();
+    }
+
+    setRunSummary("Finding files uploaded by your Slack user.");
+    updateLiveStatus("Listing files", {
+      scanned: "0",
+      matched: "0",
+      deleted: "0",
+      failed: "0",
+      threads: "-"
+    });
+    log(`Finding files uploaded by ${state.auth.user} (${state.auth.user_id}).`);
+
+    const files = await collectOwnFiles();
+    stats.scanned = files.length;
+    stats.matched = files.length;
+    renderFileMetrics("Files listed", stats);
+
+    if (!files.length) {
+      setRunSummary("No uploaded files found for your Slack user.");
+      log("No owned files found.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${files.length.toLocaleString()} files uploaded by ${state.auth.user}? This is permanent.`
+    );
+    if (!confirmed) {
+      setRunSummary("File deletion cancelled before deleting anything.");
+      updateRunMetrics({
+        phase: "Cancelled",
+        scanned: stats.scanned.toLocaleString(),
+        matched: stats.matched.toLocaleString(),
+        deleted: "0",
+        failed: "0",
+        threads: "-"
+      });
+      log("File deletion cancelled before deleting anything.");
+      return;
+    }
+
+    setRunSummary(`Deleting ${files.length.toLocaleString()} uploaded files.`);
+    log(`Starting file deletion for ${files.length} files.`);
+
+    for (const file of files) {
+      throwIfCancelled();
+      renderFileMetrics(`Deleting files • ${stats.deleted + stats.failed + 1}/${files.length}`, stats);
+
+      try {
+        await deleteFile(file);
+        stats.deleted += 1;
+        log(`Deleted file ${file.id}: ${fileDisplayName(file)}`);
+      } catch (error) {
+        if (error.message === "Run cancelled.") {
+          throw error;
+        }
+        stats.failed += 1;
+        log(`Failed file ${file.id}: ${fileDisplayName(file)} • ${error.message}`);
+      }
+
+      renderFileMetrics(`Deleting files • ${stats.deleted + stats.failed}/${files.length}`, stats);
+      setRunSummary(
+        `Deleting files: ${stats.deleted.toLocaleString()} deleted, ${stats.failed.toLocaleString()} failed.`
+      );
+    }
+
+    setRunSummary(
+      `File deletion finished. Deleted ${stats.deleted.toLocaleString()}, failed ${stats.failed.toLocaleString()}.`
+    );
+    renderFileMetrics("Completed", stats);
+  } catch (error) {
+    if (error.message === "Run cancelled.") {
+      setRunSummary("Cancellation complete.");
+      updateRunMetrics({
+        phase: "Cancelled",
+        scanned: stats.scanned.toLocaleString(),
+        matched: stats.matched.toLocaleString(),
+        deleted: stats.deleted.toLocaleString(),
+        failed: stats.failed.toLocaleString(),
+        threads: "-"
+      });
+      log("Operation cancelled by user.");
+      return;
+    }
+    throw error;
+  } finally {
+    state.cancelRequested = false;
+    state.activeRequestController = null;
+    setRunning(false);
+  }
+}
+
 async function connectSlack() {
   throwIfCancelled();
   await loadCapturedToken();
@@ -1424,6 +1631,16 @@ els.runDelete.addEventListener("click", async () => {
   } catch (error) {
     setRunSummary(`Run failed: ${error.message}`);
     log(`Run failed: ${error.message}`);
+    setRunning(false);
+  }
+});
+
+els.deleteFiles.addEventListener("click", async () => {
+  try {
+    await runDeleteFiles();
+  } catch (error) {
+    setRunSummary(`File deletion failed: ${error.message}`);
+    log(`File deletion failed: ${error.message}`);
     setRunning(false);
   }
 });
